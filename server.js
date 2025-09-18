@@ -23,25 +23,11 @@ app.use(cors({
 }))
 app.use(express.json())
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, 'uploads')
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true })
-    }
-    cb(null, uploadDir)
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname))
-  }
-})
-
+// Configure multer for memory storage (base64 encoding)
 const upload = multer({
-  storage: storage,
+  storage: multer.memoryStorage(),
   limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB limit
+    fileSize: 5 * 1024 * 1024 // 5MB limit (reduced for base64)
   },
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif|webp/
@@ -55,9 +41,6 @@ const upload = multer({
     }
   }
 })
-
-// Serve uploaded files statically
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -365,12 +348,14 @@ app.post('/api/upload/gallery', (req, res) => {
       }
 
       const { title, category, alt } = req.body
-      const imageUrl = `/uploads/${req.file.filename}`
+      
+      // Convert image to base64
+      const base64Image = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`
       
       const client = await pool.connect()
       const result = await client.query(
         'INSERT INTO gallery_images (title, category, src, alt) VALUES ($1, $2, $3, $4) RETURNING *',
-        [title, category, imageUrl, alt]
+        [title, category, base64Image, alt]
       )
       client.release()
       
