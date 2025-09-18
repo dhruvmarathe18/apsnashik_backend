@@ -3,6 +3,9 @@ const cors = require('cors')
 const { Pool } = require('pg')
 const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
+const multer = require('multer')
+const path = require('path')
+const fs = require('fs')
 require('dotenv').config()
 
 const app = express()
@@ -11,6 +14,42 @@ const PORT = process.env.PORT || 5000
 // Middleware
 app.use(cors())
 app.use(express.json())
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(__dirname, 'uploads')
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true })
+    }
+    cb(null, uploadDir)
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname))
+  }
+})
+
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif|webp/
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase())
+    const mimetype = allowedTypes.test(file.mimetype)
+    
+    if (mimetype && extname) {
+      return cb(null, true)
+    } else {
+      cb(new Error('Only image files are allowed!'))
+    }
+  }
+})
+
+// Serve uploaded files statically
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
 
 // Database connection
 const pool = new Pool({
@@ -292,6 +331,33 @@ app.delete('/api/gallery', async (req, res) => {
   } catch (error) {
     console.error('Error deleting gallery image:', error)
     res.status(500).json({ error: 'Failed to delete gallery image' })
+  }
+})
+
+// File upload endpoint for gallery images
+app.post('/api/upload/gallery', upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No image file provided' })
+    }
+
+    const { title, category, alt } = req.body
+    const imageUrl = `/uploads/${req.file.filename}`
+    
+    const client = await pool.connect()
+    const result = await client.query(
+      'INSERT INTO gallery_images (title, category, src, alt) VALUES ($1, $2, $3, $4) RETURNING *',
+      [title, category, imageUrl, alt]
+    )
+    client.release()
+    
+    res.json({
+      message: 'Image uploaded successfully',
+      image: result.rows[0]
+    })
+  } catch (error) {
+    console.error('Error uploading image:', error)
+    res.status(500).json({ error: 'Failed to upload image' })
   }
 })
 
