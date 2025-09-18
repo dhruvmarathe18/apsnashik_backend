@@ -12,7 +12,15 @@ const app = express()
 const PORT = process.env.PORT || 5000
 
 // Middleware
-app.use(cors())
+app.use(cors({
+  origin: [
+    'http://localhost:3000',
+    'https://apsnashik18.vercel.app',
+    'https://apsnashik18.vercel.app/',
+    'https://*.vercel.app'
+  ],
+  credentials: true
+}))
 app.use(express.json())
 
 // Configure multer for file uploads
@@ -50,6 +58,15 @@ const upload = multer({
 
 // Serve uploaded files statically
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  })
+})
 
 // Database connection
 const pool = new Pool({
@@ -335,30 +352,37 @@ app.delete('/api/gallery', async (req, res) => {
 })
 
 // File upload endpoint for gallery images
-app.post('/api/upload/gallery', upload.single('image'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No image file provided' })
-    }
+app.post('/api/upload/gallery', (req, res) => {
+  upload.single('image')(req, res, async (err) => {
+    try {
+      if (err) {
+        console.error('Multer error:', err)
+        return res.status(400).json({ error: err.message })
+      }
 
-    const { title, category, alt } = req.body
-    const imageUrl = `/uploads/${req.file.filename}`
-    
-    const client = await pool.connect()
-    const result = await client.query(
-      'INSERT INTO gallery_images (title, category, src, alt) VALUES ($1, $2, $3, $4) RETURNING *',
-      [title, category, imageUrl, alt]
-    )
-    client.release()
-    
-    res.json({
-      message: 'Image uploaded successfully',
-      image: result.rows[0]
-    })
-  } catch (error) {
-    console.error('Error uploading image:', error)
-    res.status(500).json({ error: 'Failed to upload image' })
-  }
+      if (!req.file) {
+        return res.status(400).json({ error: 'No image file provided' })
+      }
+
+      const { title, category, alt } = req.body
+      const imageUrl = `/uploads/${req.file.filename}`
+      
+      const client = await pool.connect()
+      const result = await client.query(
+        'INSERT INTO gallery_images (title, category, src, alt) VALUES ($1, $2, $3, $4) RETURNING *',
+        [title, category, imageUrl, alt]
+      )
+      client.release()
+      
+      res.json({
+        message: 'Image uploaded successfully',
+        image: result.rows[0]
+      })
+    } catch (error) {
+      console.error('Error uploading image:', error)
+      res.status(500).json({ error: 'Failed to upload image' })
+    }
+  })
 })
 
 // News API
