@@ -93,13 +93,30 @@ async function initializeDatabase() {
         id SERIAL PRIMARY KEY,
         title VARCHAR(255) NOT NULL,
         category VARCHAR(100),
-        src VARCHAR(500) NOT NULL,
+        src TEXT NOT NULL,
         alt VARCHAR(255),
         upload_date DATE DEFAULT CURRENT_DATE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `)
+
+    // Migrate existing gallery_images table if src column is VARCHAR(500)
+    try {
+      const columnInfo = await client.query(`
+        SELECT data_type, character_maximum_length 
+        FROM information_schema.columns 
+        WHERE table_name = 'gallery_images' AND column_name = 'src'
+      `)
+      
+      if (columnInfo.rows.length > 0 && columnInfo.rows[0].data_type === 'character varying' && columnInfo.rows[0].character_maximum_length === 500) {
+        console.log('🔄 Migrating gallery_images.src column to TEXT...')
+        await client.query('ALTER TABLE gallery_images ALTER COLUMN src TYPE TEXT')
+        console.log('✅ Migration completed successfully')
+      }
+    } catch (migrationError) {
+      console.log('ℹ️ No migration needed or migration already completed')
+    }
 
     // Create news_articles table
     await client.query(`
@@ -337,6 +354,7 @@ app.delete('/api/gallery', async (req, res) => {
 // File upload endpoint for gallery images
 app.post('/api/upload/gallery', (req, res) => {
   upload.single('image')(req, res, async (err) => {
+    let client;
     try {
       if (err) {
         console.error('Multer error:', err)
@@ -349,23 +367,48 @@ app.post('/api/upload/gallery', (req, res) => {
 
       const { title, category, alt } = req.body
       
+      // Validate required fields
+      if (!title || !category) {
+        return res.status(400).json({ error: 'Title and category are required' })
+      }
+      
+      console.log(`📤 Uploading image: ${title} (${category})`)
+      console.log(`📏 File size: ${req.file.size} bytes`)
+      console.log(`📄 MIME type: ${req.file.mimetype}`)
+      
       // Convert image to base64
       const base64Image = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`
+      console.log(`📊 Base64 length: ${base64Image.length} characters`)
       
-      const client = await pool.connect()
+      client = await pool.connect()
       const result = await client.query(
         'INSERT INTO gallery_images (title, category, src, alt) VALUES ($1, $2, $3, $4) RETURNING *',
         [title, category, base64Image, alt]
       )
-      client.release()
+      
+      console.log('✅ Image uploaded successfully to database')
       
       res.json({
         message: 'Image uploaded successfully',
         image: result.rows[0]
       })
     } catch (error) {
-      console.error('Error uploading image:', error)
-      res.status(500).json({ error: 'Failed to upload image' })
+      console.error('❌ Error uploading image:', error)
+      console.error('Error details:', {
+        message: error.message,
+        code: error.code,
+        detail: error.detail,
+        constraint: error.constraint
+      })
+      
+      res.status(500).json({ 
+        error: 'Failed to upload image',
+        details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      })
+    } finally {
+      if (client) {
+        client.release()
+      }
     }
   })
 })
