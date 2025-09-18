@@ -21,13 +21,14 @@ app.use(cors({
   ],
   credentials: true
 }))
-app.use(express.json())
+app.use(express.json({ limit: '50mb' }))
+app.use(express.urlencoded({ limit: '50mb', extended: true }))
 
 // Configure multer for memory storage (base64 encoding)
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB limit (reduced for base64)
+    fileSize: 10 * 1024 * 1024 // 10MB limit (increased for base64 conversion)
   },
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif|webp/
@@ -358,6 +359,12 @@ app.post('/api/upload/gallery', (req, res) => {
     try {
       if (err) {
         console.error('Multer error:', err)
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(413).json({ 
+            error: 'File too large. Please upload an image smaller than 10MB.',
+            maxSize: '10MB'
+          })
+        }
         return res.status(400).json({ error: err.message })
       }
 
