@@ -158,6 +158,20 @@ async function initializeDatabase() {
       )
     `)
 
+    // Create hero_images table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS hero_images (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        src TEXT NOT NULL,
+        alt VARCHAR(255),
+        is_active BOOLEAN DEFAULT false,
+        display_order INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+
     // Insert sample data
     await client.query(`
       INSERT INTO events (title, date, description, category, status) VALUES
@@ -181,6 +195,14 @@ async function initializeDatabase() {
       ('School Achieves 100% Board Results', 'Our school has achieved excellent results in the recent board examinations with 100% pass rate and outstanding performance by our students.', '2024-01-20', 'published'),
       ('New Computer Lab Inauguration', 'We are excited to announce the inauguration of our new state-of-the-art computer laboratory equipped with latest technology and software.', '2024-01-25', 'published'),
       ('Annual Sports Meet Success', 'The annual sports meet was a grand success with participation from all students and excellent performances in various sports events.', '2024-01-30', 'published')
+      ON CONFLICT DO NOTHING
+    `)
+
+    await client.query(`
+      INSERT INTO hero_images (title, src, alt, is_active, display_order) VALUES
+      ('Main Hero Image', '/images/hero.png', 'Apple Public School Nashik - Main Hero Image', true, 1),
+      ('Students Learning', '/images/kids.jpg', 'Students engaged in learning activities', false, 2),
+      ('School Building', '/images/infra.jpg', 'Apple Public School building and infrastructure', false, 3)
       ON CONFLICT DO NOTHING
     `)
 
@@ -410,6 +432,142 @@ app.post('/api/upload/gallery', (req, res) => {
       
       res.status(500).json({ 
         error: 'Failed to upload image',
+        details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      })
+    } finally {
+      if (client) {
+        client.release()
+      }
+    }
+  })
+})
+
+// Hero Images API
+app.get('/api/hero', async (req, res) => {
+  try {
+    const client = await pool.connect()
+    const result = await client.query('SELECT * FROM hero_images ORDER BY display_order ASC, created_at DESC')
+    client.release()
+    res.json(result.rows)
+  } catch (error) {
+    console.error('Error fetching hero images:', error)
+    res.status(500).json({ error: 'Failed to fetch hero images' })
+  }
+})
+
+app.post('/api/hero', async (req, res) => {
+  try {
+    const { title, src, alt, is_active, display_order } = req.body
+    const client = await pool.connect()
+    const result = await client.query(
+      'INSERT INTO hero_images (title, src, alt, is_active, display_order) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [title, src, alt, is_active || false, display_order || 0]
+    )
+    client.release()
+    res.status(201).json(result.rows[0])
+  } catch (error) {
+    console.error('Error creating hero image:', error)
+    res.status(500).json({ error: 'Failed to create hero image' })
+  }
+})
+
+app.put('/api/hero', async (req, res) => {
+  try {
+    const { id, title, src, alt, is_active, display_order } = req.body
+    const client = await pool.connect()
+    const result = await client.query(
+      'UPDATE hero_images SET title = $1, src = $2, alt = $3, is_active = $4, display_order = $5, updated_at = CURRENT_TIMESTAMP WHERE id = $6 RETURNING *',
+      [title, src, alt, is_active, display_order, id]
+    )
+    client.release()
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Hero image not found' })
+    }
+    
+    res.json(result.rows[0])
+  } catch (error) {
+    console.error('Error updating hero image:', error)
+    res.status(500).json({ error: 'Failed to update hero image' })
+  }
+})
+
+app.delete('/api/hero', async (req, res) => {
+  try {
+    const { id } = req.query
+    const client = await pool.connect()
+    const result = await client.query('DELETE FROM hero_images WHERE id = $1 RETURNING *', [id])
+    client.release()
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Hero image not found' })
+    }
+    
+    res.json({ message: 'Hero image deleted successfully' })
+  } catch (error) {
+    console.error('Error deleting hero image:', error)
+    res.status(500).json({ error: 'Failed to delete hero image' })
+  }
+})
+
+// File upload endpoint for hero images
+app.post('/api/upload/hero', (req, res) => {
+  upload.single('image')(req, res, async (err) => {
+    let client;
+    try {
+      if (err) {
+        console.error('Multer error:', err)
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(413).json({ 
+            error: 'File too large. Please upload an image smaller than 10MB.',
+            maxSize: '10MB'
+          })
+        }
+        return res.status(400).json({ error: err.message })
+      }
+
+      if (!req.file) {
+        return res.status(400).json({ error: 'No image file provided' })
+      }
+
+      const { title, alt, is_active, display_order } = req.body
+      
+      // Validate required fields
+      if (!title) {
+        return res.status(400).json({ error: 'Title is required' })
+      }
+      
+      console.log(`📤 Uploading hero image: ${title}`)
+      console.log(`📏 File size: ${req.file.size} bytes`)
+      console.log(`📄 MIME type: ${req.file.mimetype}`)
+      
+      // Convert image to base64
+      const base64Image = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`
+      console.log(`📊 Base64 length: ${base64Image.length} characters`)
+      
+      client = await pool.connect()
+      const result = await client.query(
+        'INSERT INTO hero_images (title, src, alt, is_active, display_order) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        [title, base64Image, alt, is_active === 'true', display_order || 0]
+      )
+      
+      console.log('✅ Hero image uploaded successfully to database')
+      
+      res.json({
+        message: 'Hero image uploaded successfully',
+        image: result.rows[0]
+      })
+    } catch (error) {
+      console.error('❌ Error uploading hero image:', error)
+      console.error('Error details:', {
+        message: error.message,
+        code: error.code,
+        detail: error.detail,
+        constraint: error.constraint
+      })
+      
+      res.status(500).json({ 
+        error: 'Failed to upload hero image',
         details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
       })
     } finally {
